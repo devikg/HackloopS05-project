@@ -35,10 +35,9 @@ class Gemini {
   /// Turns the internal media verdict into the text shown on the card.
   static String mediaLabel(String v) => switch (v) {
     'likely_fake' => 'likely fake: photo of a screen or print',
-    'claim_not_visible' =>
-      'claimed hazard not visible in photo (no fire or smoke seen)',
+    'claim_not_visible' => 'claimed issue not visible in photo',
     'claim_visible' =>
-      'hazard visible in photo (this is not proof the photo is genuine)',
+      'claimed issue visible in photo (this is not proof the photo is genuine)',
     'reused_media' => 'same photo reused across reports',
     'cannot_determine' => 'cannot determine from photo',
     'no_media' => 'no photo to check',
@@ -74,7 +73,7 @@ class Gemini {
     ];
   }
 
-  /// Plain summary used for the More screen (local issues).
+  /// Plain written summary for the More screen (no photo checks).
   static Future<String> summarize(List<Report> rs, {bool local = false}) async {
     if (rs.isEmpty) {
       lastStatus = 'Gemini: no reports, not called';
@@ -88,7 +87,7 @@ class Gemini {
         )
         .join('\n');
     final prompt =
-        '''You are a public-safety analyst. From these crowd reports (${rs.length} total) write:
+        '''You are ${local ? 'a civic-issues analyst' : 'a public-safety analyst'}. From these community reports (${rs.length} total) write:
 1) Current status, 2) Timeline of how it developed, 3) Likely outlook for the next hours,
 4) Advice (${local ? 'civic/traffic' : 'safety'}). Max 70 words, plain language.
 Reports:\n$data''';
@@ -99,12 +98,26 @@ Reports:\n$data''';
   }
 
   /// Checks each photo against the claim in its report.
-  /// Gives opinions only. It cannot confirm that an incident is real or fake.
-  static Future<Map<String, dynamic>?> analyse(List<Report> rs) async {
+  /// Works for emergency reports (local: false) and local community issues (local: true).
+  /// Gives opinions only. It cannot confirm that an issue is real or fake.
+  static Future<Map<String, dynamic>?> analyse(
+    List<Report> rs, {
+    bool local = false,
+  }) async {
     if (rs.isEmpty) {
       lastStatus = 'Gemini: no reports, not called';
       return null;
     }
+
+    final role = local
+        ? 'a verification assistant for a community issue-reporting app'
+        : 'a verification assistant for a public-safety app';
+    final examples = local
+        ? 'for example pothole, broken streetlight, flooded road, overflowing drain, garbage dump, damaged footpath'
+        : 'for example fire, flames, smoke, flooding, a collapsed structure';
+    final adviceRule = local
+        ? 'say the relevant authority or local residents should verify on the ground before acting'
+        : 'say responders must verify on the ground before acting';
 
     // 1. One image per report, for up to 6 reports (JPEG, max 768px)
     final frames = <int, Uint8List>{};
@@ -148,19 +161,19 @@ Reports:\n$data''';
         : localFlags.map((f) => f['detail']).join(' ');
 
     final prompt =
-        '''You are a verification assistant for a public-safety app.
-You can see the written reports and up to 3 photos. Each report claims a type of incident.
-You can NOT confirm that any incident is real or fake. Describe only what the photos show.
+        '''You are $role.
+You can see the written reports and up to 3 photos. Each report claims a type of ${local ? 'community issue' : 'incident'}.
+You can NOT confirm that any ${local ? 'issue' : 'incident'} is real or fake. Describe only what the photos show.
 
 For EACH photo that is attached, answer:
-- hazard_visible: "yes", "no" or "unclear". Is the claimed hazard (for example fire, flames, smoke, flooding, a collapsed structure) clearly visible in the photo? Only "yes" if it is clearly visible.
+- hazard_visible: "yes", "no" or "unclear". Is the claimed ${local ? 'issue' : 'hazard'} (claimed type: $examples) clearly visible in the photo? Only "yes" if it is clearly visible.
 - is_screen_or_print: "yes", "no" or "unclear". Is this a photo of a computer monitor, laptop, phone, TV, tablet, or a printed picture, instead of a direct photo of a real scene? Look for bezels or device edges, a pixel grid or moire pattern, glare or reflections of the screen, keyboards, taskbars, window frames, or a visible rectangular screen border.
 - evidence: a short phrase naming what you saw that supports your answer. Write "none" if nothing.
 
 Then give ONE overall media_verdict:
 - "likely_fake": at least one photo is a photo of a screen or print.
-- "claim_not_visible": the photos are direct photos of a real scene, and the claimed hazard is not visible in them.
-- "claim_visible": the photos are direct photos of a real scene, and the claimed hazard is clearly visible in them.
+- "claim_not_visible": the photos are direct photos of a real scene, and the claimed ${local ? 'issue' : 'hazard'} is not visible in them.
+- "claim_visible": the photos are direct photos of a real scene, and the claimed ${local ? 'issue' : 'hazard'} is clearly visible in them.
 - "cannot_determine": the photos are unclear.
 - "no_media": no photos are attached.
 
@@ -175,15 +188,12 @@ Return ONLY valid JSON, no markdown, in exactly this shape:
 Rules:
 - "verdict": consistent, possibly_coordinated, contradictory, or insufficient.
 - "media_assessment": one or two sentences starting with "Opinion:". Say what the photos show and what they cannot show.
-- "correlation": one sentence on time, location, and whether the reports describe the same event.
+- "correlation": one sentence on time, location, and whether the reports describe the same ${local ? 'issue' : 'event'}.
 - "observed": facts stated in the reports or clearly visible in the photos (max 4).
 - "inferred": likely conclusions, each clearly marked as an inference (max 3).
 - "flags": only these types: screen_photo, hazard_not_visible, media_manipulation_signs, ai_generation_signs, conflicting_details, timing_gap, location_mismatch, identical_wording, no_media, single_source. Empty list if none apply.
-- "advice": one sentence. If the verdict is not consistent, or the media_verdict is not claim_visible, say responders must verify on the ground before acting.
-- Never say that an incident is real or fake. Only describe the photos.
-
-Reports:
-$data''';
+- "advice": one sentence. If the verdict is not consistent, or the media_verdict is not claim_visible, $adviceRule.
+- Never say that an ${local ? 'issue' : 'incident'} is real or fake. Only describe the photos.''';
 
     parts.insert(0, {'text': prompt});
 
@@ -210,7 +220,7 @@ $data''';
             final shows = f['hazard_visible']?.toString() ?? 'unclear';
             final screen = f['is_screen_or_print']?.toString() ?? 'unclear';
             final ev = f['evidence']?.toString() ?? '';
-            return 'Report ${f['report']}: hazard visible: $shows; screen or print: $screen'
+            return 'Report ${f['report']}: claimed issue visible: $shows; screen or print: $screen'
                 '${ev.isNotEmpty && ev != 'none' ? ' ($ev)' : ''}';
           })
           .toList();

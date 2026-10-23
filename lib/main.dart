@@ -889,7 +889,13 @@ class _ReportsState extends State<ReportsScreen> {
                           color: Colors.white54,
                         ),
                       ),
-
+                      Text(
+                        'Fetch: ${Db.lastFetchError ?? 'OK'}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white54,
+                        ),
+                      ),
                       const SizedBox(height: 4),
                       Text(
                         Gemini.lastStatus,
@@ -1115,7 +1121,6 @@ class _ReportScreenState extends State<ReportScreen> {
             border: OutlineInputBorder(),
           ),
         ),
-
         const SizedBox(height: 8),
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(
@@ -1160,11 +1165,13 @@ class _MoreState extends State<MoreScreen> with AutomaticKeepAliveClientMixin {
   bool get wantKeepAlive => true; // keeps the selected city when swiping to other tabs
 
   double lat = 0, lng = 0;
-  String city = 'Locating...', region = '', outlook = '';
+  String city = 'Locating...', region = '';
   bool gotLocation = false;
   Map<String, dynamic>? w;
   List<Map<String, dynamic>> news = [];
   List<Report> issues = [];
+  Map<String, dynamic>? localAi; // Gemini verification of local issues
+  bool localAiLoading = false;
   Timer? _timer;
 
   @override
@@ -1232,9 +1239,154 @@ class _MoreState extends State<MoreScreen> with AutomaticKeepAliveClientMixin {
       w = results[0] as Map<String, dynamic>?;
       news = results[1] as List<Map<String, dynamic>>;
       issues = results[2] as List<Report>;
+      localAiLoading = issues.isNotEmpty;
+      if (issues.isEmpty) localAi = null;
     });
-    final o = await Gemini.summarize(issues, local: true);
-    if (mounted) setState(() => outlook = o);
+
+    if (issues.isEmpty) return;
+
+    final analysis = await Gemini.analyse(issues, local: true);
+    if (mounted) {
+      setState(() {
+        localAi = analysis;
+        localAiLoading = false;
+      });
+    }
+  }
+
+  /// Human-readable label for the overall verdict of local issues.
+  static String _verdictText(String v) => switch (v) {
+    'consistent' => 'Reports are consistent with each other',
+    'possibly_coordinated' => 'Reports may be coordinated or copied',
+    'contradictory' => 'Reports contradict each other',
+    'insufficient' => 'Not enough information to judge',
+    _ => v.replaceAll('_', ' '),
+  };
+
+  /// Card that shows the same verification details as the emergency card.
+  Widget _localAnalysisCard() {
+    if (localAiLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('Checking local reports with Gemini...'),
+      );
+    }
+    final ai = localAi;
+    if (ai == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text(
+          'AI check unavailable. Showing reports only.',
+          style: TextStyle(color: Colors.white54),
+        ),
+      );
+    }
+
+    final mediaVerdict = (ai['media_verdict'] ?? '').toString();
+    final observed = (ai['observed'] as List?)?.cast<String>() ?? const [];
+    final inferred = (ai['inferred'] as List?)?.cast<String>() ?? const [];
+    final findings =
+        (ai['image_findings'] as List?)?.cast<String>() ?? const [];
+    final flags = (ai['flags'] as List?)?.whereType<Map>().toList() ?? const [];
+    final advice = (ai['advice'] ?? '').toString();
+    final assessment = (ai['media_assessment'] ?? '').toString();
+    final correlation = (ai['correlation'] ?? '').toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 6),
+        Text(
+          _verdictText((ai['verdict'] ?? 'insufficient').toString()),
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        if (mediaVerdict.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Photo check: ${Gemini.mediaLabel(mediaVerdict)}',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color:
+                    mediaVerdict == 'likely_fake' ||
+                        mediaVerdict == 'reused_media'
+                    ? Colors.redAccent
+                    : Colors.amberAccent,
+              ),
+            ),
+          ),
+        for (final f in findings)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              f,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        if (assessment.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              assessment,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        if (correlation.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Correlation: $correlation',
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        if (observed.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Observed (reported directly)',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          for (final o in observed)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text('• $o'),
+            ),
+        ],
+        if (inferred.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'Inferred (likely, not confirmed)',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          for (final i in inferred)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '• $i',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ),
+        ],
+        if (flags.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          for (final f in flags)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '⚠ ${f['detail'] ?? f['type'] ?? ''}',
+                style: const TextStyle(color: Colors.amberAccent, fontSize: 13),
+              ),
+            ),
+        ],
+        if (advice.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Advice: $advice',
+              style: const TextStyle(color: Colors.amberAccent),
+            ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -1373,19 +1525,11 @@ class _MoreState extends State<MoreScreen> with AutomaticKeepAliveClientMixin {
                     ),
                   ],
                 ),
-                if (outlook.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Text(
-                      'AI outlook: $outlook',
-                      style: const TextStyle(color: Colors.amberAccent),
-                    ),
-                  ),
+                _localAnalysisCard(),
                 Text(
                   Gemini.lastStatus,
                   style: const TextStyle(fontSize: 12, color: Colors.white54),
                 ),
-
                 for (final r in issues.take(8))
                   ListTile(
                     contentPadding: EdgeInsets.zero,
