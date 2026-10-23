@@ -42,20 +42,23 @@ class Report {
     'synced': synced ? 1 : 0,
   };
 
+  /// Tolerant of missing or null values, so one incomplete row can't break the feed.
   factory Report.fromMap(Map m) => Report(
-    id: m['id'],
-    kind: m['kind'],
-    category: m['category'] ?? 'Other',
-    title: m['title'] ?? '',
-    description: m['description'] ?? '',
-    area: m['area'] ?? '',
-    lat: (m['lat'] as num).toDouble(),
-    lng: (m['lng'] as num).toDouble(),
-    createdAt: DateTime.parse(m['created_at']).toLocal(),
-    mediaUrl: m['media_url'],
-    mediaPath: m['media_path'],
-    callStatus: m['call_status'],
-    synced: m['synced'] == 1,
+    id: m['id'].toString(),
+    kind: (m['kind'] ?? 'local').toString(),
+    category: m['category']?.toString() ?? 'Other',
+    title: m['title']?.toString() ?? '',
+    description: m['description']?.toString() ?? '',
+    area: m['area']?.toString() ?? '',
+    lat: (m['lat'] as num?)?.toDouble() ?? 0,
+    lng: (m['lng'] as num?)?.toDouble() ?? 0,
+    createdAt:
+        DateTime.tryParse(m['created_at']?.toString() ?? '')?.toLocal() ??
+        DateTime.now(),
+    mediaUrl: m['media_url']?.toString(),
+    mediaPath: m['media_path']?.toString(),
+    callStatus: m['call_status']?.toString(),
+    synced: m['synced'] == 1 || m['synced'] == true,
   );
 }
 

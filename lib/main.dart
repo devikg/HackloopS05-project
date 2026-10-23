@@ -20,6 +20,8 @@ import 'media_service.dart';
 import 'notify_service.dart';
 import 'report_detail.dart';
 
+import 'package:speech_to_text/speech_to_text.dart';
+
 import 'dart:io';
 
 const red = Color(0xFFE53935), bg = Color(0xFF0B0F17), card = Color(0xFF161C28);
@@ -692,6 +694,45 @@ class _ReportsState extends State<ReportsScreen> {
           if (aiLoading) const Text('Analysing reports with Gemini...'),
           if (!aiLoading && ai == null)
             const Text('AI analysis unavailable. Showing reports only.'),
+          if ((ai?['media_verdict'] ?? '').toString().isNotEmpty)
+            Text(
+              'Photo check: ${Gemini.mediaLabel(ai!['media_verdict'].toString())}',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color:
+                    ai!['media_verdict'] == 'likely_fake' ||
+                        ai!['media_verdict'] == 'reused_media'
+                    ? Colors.redAccent
+                    : Colors.amberAccent,
+              ),
+            ),
+          for (final f
+              in ((ai?['image_findings'] as List?) ?? []).cast<String>())
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                f,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+          if ((ai?['media_assessment'] ?? '').toString().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                ai!['media_assessment'].toString(),
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+
+          if ((ai?['correlation'] ?? '').toString().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Correlation: ${ai!['correlation']}',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+            ),
+          const SizedBox(height: 8),
           if (observed.isNotEmpty) ...[
             const Text(
               'Observed (reported directly)',
@@ -841,6 +882,14 @@ class _ReportsState extends State<ReportsScreen> {
                         'Gemini status',
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
+                      Text(
+                        'Sync: ${Db.lastSyncError ?? 'OK'}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white54,
+                        ),
+                      ),
+
                       const SizedBox(height: 4),
                       Text(
                         Gemini.lastStatus,
@@ -902,6 +951,52 @@ class _ReportScreenState extends State<ReportScreen> {
   final desc = TextEditingController();
   String? path;
   bool busy = false;
+  final stt = SpeechToText();
+  bool listening = false;
+
+  Future<void> toggleVoice() async {
+    if (listening) {
+      await stt.stop();
+      setState(() => listening = false);
+      return;
+    }
+    final ok = await stt.initialize(
+      onError: (_) => setState(() => listening = false),
+      onStatus: (s) {
+        if (s == 'done' || s == 'notListening') {
+          setState(() => listening = false);
+        }
+      },
+    );
+    if (!ok) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Voice input not available. Allow microphone access, or type instead.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => listening = true);
+    await stt.listen(
+      localeId: 'en_IN',
+      listenFor: const Duration(seconds: 60),
+      pauseFor: const Duration(seconds: 5),
+      onResult: (r) {
+        desc.text = r.recognizedWords;
+        desc.selection = TextSelection.collapsed(offset: desc.text.length);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    stt.stop();
+    super.dispose();
+  }
 
   Future<void> pick(bool video) async {
     final f = video
@@ -1018,6 +1113,23 @@ class _ReportScreenState extends State<ReportScreen> {
           decoration: const InputDecoration(
             labelText: 'What did you see?',
             border: OutlineInputBorder(),
+          ),
+        ),
+
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(52),
+          ),
+          onPressed: toggleVoice,
+          icon: Icon(
+            listening ? Icons.stop_circle : Icons.mic,
+            color: listening ? red : null,
+          ),
+          label: Text(
+            listening
+                ? 'Listening... tap to stop'
+                : 'Speak description (voice)',
           ),
         ),
         const SizedBox(height: 8),

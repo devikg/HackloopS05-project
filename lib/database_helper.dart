@@ -14,6 +14,12 @@ class Db {
   Database? _db;
   SupabaseClient get _sb => Supabase.instance.client;
 
+  /// Last sync error shown on screen (outgoing uploads).
+  static String? lastSyncError;
+
+  /// Last fetch error shown on screen (incoming reports).
+  static String? lastFetchError;
+
   Future<Database> get db async => _db ??= await openDatabase(
     join(await getDatabasesPath(), 'safe.db'),
     version: 2,
@@ -35,11 +41,25 @@ class Db {
     },
   );
 
-  Future<void> saveLocal(Report r) async => (await db).insert(
-    'reports',
-    r.toLocal(),
-    conflictAlgorithm: ConflictAlgorithm.ignore,
-  );
+  /// Inserts a new local report, or updates the remote fields of an existing one.
+  /// media_path is kept so the phone's local file is never lost.
+  Future<void> saveLocal(Report r) async {
+    final d = await db;
+    final fields = r.toRemote()..['synced'] = r.synced ? 1 : 0;
+    final updated = await d.update(
+      'reports',
+      fields,
+      where: 'id=?',
+      whereArgs: [r.id],
+    );
+    if (updated == 0) {
+      await d.insert(
+        'reports',
+        r.toLocal(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+  }
 
   Future<void> submit(Report r) async {
     await saveLocal(r);
@@ -51,14 +71,20 @@ class Db {
     final d = await db;
     final rows = await d.query('reports', where: 'synced=0');
     for (final m in rows) {
+      final r = Report.fromMap(m);
       try {
-        final r = Report.fromMap(m);
         String? url = r.mediaUrl;
         if (url == null &&
             r.mediaPath != null &&
             File(r.mediaPath!).existsSync()) {
           final name = '${r.id}${extension(r.mediaPath!)}';
-          await _sb.storage.from('media').upload(name, File(r.mediaPath!));
+          await _sb.storage
+              .from('media')
+              .upload(
+                name,
+                File(r.mediaPath!),
+                fileOptions: const FileOptions(upsert: true),
+              );
           url = _sb.storage.from('media').getPublicUrl(name);
         }
         await _sb.from('reports').upsert({...r.toRemote(), 'media_url': url});
@@ -68,13 +94,16 @@ class Db {
           where: 'id=?',
           whereArgs: [r.id],
         );
-      } catch (_) {
-        return; // offline - keep queued
+        lastSyncError = null;
+      } catch (e) {
+        lastSyncError = '${r.title}: $e';
+        return;
       }
     }
   }
 
-  /// Pull latest public reports, merge locally, return filtered list (newest first).
+  /// Pull latest public reports from Supabase, merge locally, return the list (newest first).
+  /// Works for a phone that has never submitted anything.
   Future<List<Report>> fetch(String kind) async {
     try {
       await sync();
@@ -83,10 +112,21 @@ class Db {
           .select()
           .order('created_at', ascending: false)
           .limit(300);
+
+      var skipped = 0;
       for (final m in rows) {
-        await saveLocal(Report.fromMap({...m, 'synced': 1}));
+        try {
+          await saveLocal(Report.fromMap({...m, 'synced': 1}));
+        } catch (e) {
+          skipped++;
+          lastFetchError = 'Row ${m['id']} skipped: $e';
+        }
       }
-    } catch (_) {}
+      if (skipped == 0) lastFetchError = null;
+    } catch (e) {
+      lastFetchError = 'Fetch failed: $e';
+    }
+
     final local = await (await db).query(
       'reports',
       where: 'kind=?',

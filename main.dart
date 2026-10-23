@@ -1077,7 +1077,7 @@ class _SafeSphereHomeState extends State<SafeSphereHome> {
                   child: Row(
                     children: [
                       const Icon(
-                        Icons.bluetooth_Searching_rounded,
+                        Icons.bluetooth_searching_rounded,
                         size: 16,
                         color: _blue,
                       ),
