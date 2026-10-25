@@ -74,9 +74,15 @@ String ago(DateTime t) {
       : DateFormat('d MMM').format(t);
 }
 
+/// True for audio evidence (.m4a), for reports saved by older builds.
+bool isAudioReport(Report r) =>
+    (r.mediaPath ?? '').endsWith('.m4a') || (r.mediaUrl ?? '').contains('.m4a');
+
 Widget thumb(Report r, {double s = 56}) {
   final vid = MediaSvc.isVideo(r.mediaPath ?? r.mediaUrl);
-  final Widget img = !vid && r.mediaUrl != null
+  final Widget img = isAudioReport(r)
+      ? Container(color: Colors.white10, child: const Icon(Icons.mic))
+      : !vid && r.mediaUrl != null
       ? Image.network(
           r.mediaUrl!,
           fit: BoxFit.cover,
@@ -586,7 +592,8 @@ class _ReportsState extends State<ReportsScreen> {
     trailing: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (MediaSvc.hasMedia(r))
+        // Audio can't be saved to the gallery, so the download icon is hidden for it
+        if (MediaSvc.hasMedia(r) && !isAudioReport(r))
           IconButton(
             icon: const Icon(Icons.download, size: 20),
             onPressed: () async {
