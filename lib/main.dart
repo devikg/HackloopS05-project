@@ -36,7 +36,7 @@ Future<void> main() async {
   runApp(
     MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'SAFE Community',
+      title: 'Ground Truth',
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: bg,
         colorScheme: const ColorScheme.dark(
